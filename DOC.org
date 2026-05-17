@@ -119,6 +119,11 @@ railway variables set \
 railway up
 #+END_SRC
 
+#+RESULTS:
+| Indexing...  |       |                                                                                                                                                        |
+| Uploading... |       |                                                                                                                                                        |
+| Build        | Logs: | https://railway.com/project/99066d72-dff3-4ae7-a896-19f17e6fedb0/service/c0f44ccc-e5db-416a-981a-b30c7c97d722?id=0b3f0cff-8b91-4332-80c2-549f73b46787& |
+
 Après le premier déploiement, Railway affiche l'URL publique. Mettre à jour le champ
 *Authorization Callback Domain* dans l'app Strava avec ce domaine.
 

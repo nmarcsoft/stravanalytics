@@ -15,17 +15,8 @@ router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
 
 _TYPE_COLORS = {"VMA": "#EF4444", "SEUIL": "#F59E0B", "EF": "#10B981", "OTHER": "#6B7280"}
-_TYPE_LABELS = {"VMA": "VMA", "SEUIL": "Seuil", "EF": "Endurance Fondamentale", "OTHER": "Autre"}
-_METRICS = [
-    ("pace",         "Allure (min/km)", "y",  True),
-    ("distance_km",  "Distance (km)",   "y2", True),
-    ("avg_hr",       "FC Moy (bpm)",    "y3", False),
-    ("max_hr",       "FC Max (bpm)",    "y4", False),
-    ("elevation",    "Dénivelé+ (m)",   "y5", False),
-    ("duration_min", "Durée (min)",     "y6", False),
-]
-_DASH = {"pace": "solid", "distance_km": "dot", "avg_hr": "dash",
-         "max_hr": "longdash", "elevation": "dashdot", "duration_min": "longdashdot"}
+_TYPE_LABELS = {"VMA": "VMA", "SEUIL": "Seuil", "EF": "EF", "OTHER": "Autre"}
+_STYPE_ORDER = ("VMA", "SEUIL", "EF", "OTHER")
 _PER_PAGE = 25
 
 
@@ -121,7 +112,6 @@ async def api_chart_data(
     if not user:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
 
-    # Persister les filtres
     user.last_filters = {
         "date_from": date_from, "date_to": date_to,
         "title_contains": title_contains, "description_contains": description_contains,
@@ -140,91 +130,93 @@ async def api_chart_data(
     query = _filter_by_types(query, selected)
     activities = query.order_by(Activity.start_date).all()
 
-    traces = []
+    if activities:
+        km_vals = [a.distance_km for a in activities]
+        margin = max(0.5, (max(km_vals) - min(km_vals)) * 0.04)
+        x_range = [max(0, min(km_vals) - margin), max(km_vals) + margin]
+    else:
+        x_range = [0, 20]
 
-    for stype in ("VMA", "SEUIL", "EF", "OTHER"):
-        if stype not in selected:
-            continue
-        group = [a for a in activities if a.effective_session_type == stype]
-        if not group:
-            continue
-
-        color = _TYPE_COLORS[stype]
-        label = _TYPE_LABELS[stype]
-        dates = [a.start_date.strftime("%Y-%m-%d") for a in group]
-        names = [a.name for a in group]
-
-        def _metric_vals(a):
-            return {
-                "pace":         a.pace_min_per_km,
-                "distance_km":  round(a.distance_km, 2),
-                "avg_hr":       a.average_heartrate,
-                "max_hr":       a.max_heartrate,
-                "elevation":    a.total_elevation_gain,
-                "duration_min": round(a.duration_min, 1),
-            }
-
-        def _hover(a, key):
-            mv = _metric_vals(a)
-            parts = {
-                "pace":         f"Allure: {_fmt_pace(mv['pace'])} min/km",
-                "distance_km":  f"Distance: {mv['distance_km']} km",
-                "avg_hr":       f"FC moy: {mv['avg_hr']:.0f} bpm" if mv["avg_hr"] else "",
-                "max_hr":       f"FC max: {mv['max_hr']:.0f} bpm" if mv["max_hr"] else "",
-                "elevation":    f"D+: {mv['elevation']:.0f} m" if mv["elevation"] else "",
-                "duration_min": f"Durée: {int(mv['duration_min'])} min",
-            }
-            return parts[key]
-
-        for metric_key, metric_label, yaxis, default_visible in _METRICS:
-            values = [_metric_vals(a)[metric_key] for a in group]
-            if not any(v is not None for v in values):
-                continue
-
-            hover = [f"<b>{n}</b><br>{_hover(a, metric_key)}" for n, a in zip(names, group)]
-
-            traces.append({
-                "name": f"{label} — {metric_label}",
-                "type": "scatter",
-                "mode": "markers+lines",
-                "x": dates,
-                "y": values,
-                "text": hover,
-                "hovertemplate": "%{text}<extra></extra>",
-                "marker": {"color": color, "size": 7},
-                "line": {"color": color, "dash": _DASH[metric_key], "width": 2},
-                "yaxis": yaxis,
-                "visible": True if default_visible else "legendonly",
-                "legendgroup": f"{stype}_{metric_key}",
-            })
-
-    layout = {
+    _base_layout = {
         "paper_bgcolor": "#0F172A",
         "plot_bgcolor": "#1E293B",
-        "font": {"color": "#F1F5F9", "family": "Inter, system-ui, sans-serif", "size": 12},
-        "legend": {
-            "bgcolor": "#1E293B", "bordercolor": "#334155", "borderwidth": 1,
-            "orientation": "v", "x": 1.02, "xanchor": "left", "y": 1, "yanchor": "top",
-            "traceorder": "grouped",
-        },
-        "margin": {"l": 60, "r": 60, "t": 20, "b": 50},
+        "font": {"color": "#F1F5F9", "family": "Inter, system-ui, sans-serif", "size": 11},
+        "margin": {"l": 55, "r": 20, "t": 8, "b": 38},
         "hovermode": "closest",
-        "xaxis": {"title": "Date", "gridcolor": "#334155", "zerolinecolor": "#334155"},
-        "yaxis":  {"title": "Allure (min/km)", "gridcolor": "#334155", "autorange": "reversed",
-                   "tickformat": ".2f", "side": "left"},
-        "yaxis2": {"title": "Distance (km)", "overlaying": "y", "side": "right",
-                   "showgrid": False, "anchor": "free", "position": 1.0},
-        "yaxis3": {"title": "FC Moy (bpm)", "overlaying": "y", "side": "right",
-                   "showgrid": False, "anchor": "free", "position": 0.93},
-        "yaxis4": {"title": "FC Max (bpm)", "overlaying": "y", "side": "right",
-                   "showgrid": False, "anchor": "free", "position": 0.86},
-        "yaxis5": {"title": "Dénivelé+ (m)", "overlaying": "y", "side": "right",
-                   "showgrid": False, "anchor": "free", "position": 0.79},
-        "yaxis6": {"title": "Durée (min)", "overlaying": "y", "side": "right",
-                   "showgrid": False, "anchor": "free", "position": 0.72},
+        "xaxis": {"title": "Distance (km)", "gridcolor": "#334155", "zerolinecolor": "#334155", "range": x_range},
     }
 
-    return JSONResponse({"traces": traces, "layout": layout, "count": len(activities)})
+    traces_hr, traces_pace, traces_elev = [], [], []
+
+    for stype in _STYPE_ORDER:
+        color = _TYPE_COLORS[stype]
+        label = _TYPE_LABELS[stype]
+
+        if stype not in selected:
+            placeholder = {"name": label, "type": "scatter", "mode": "markers",
+                           "x": [], "y": [], "visible": False, "marker": {"color": color}}
+            traces_hr.append(placeholder)
+            traces_pace.append({**placeholder})
+            traces_elev.append({**placeholder})
+            continue
+
+        group = [a for a in activities if a.effective_session_type == stype]
+        xs = [round(a.distance_km, 2) for a in group]
+
+        def _h(a, val):
+            return f"<b>{a.name}</b><br>{a.start_date.strftime('%d/%m/%Y')}<br>{val}"
+
+        base = {
+            "name": label, "type": "scatter", "mode": "markers",
+            "marker": {"color": color, "size": 8, "opacity": 0.85},
+            "hovertemplate": "%{text}<extra></extra>",
+        }
+
+        traces_hr.append({
+            **base, "x": xs,
+            "y": [a.average_heartrate for a in group],
+            "text": [_h(a, f"FC: {int(a.average_heartrate)} bpm" if a.average_heartrate else "FC: —") for a in group],
+        })
+        traces_pace.append({
+            **base, "showlegend": False, "x": xs,
+            "y": [a.pace_min_per_km for a in group],
+            "text": [_h(a, f"Allure: {_fmt_pace(a.pace_min_per_km)} min/km") for a in group],
+        })
+        traces_elev.append({
+            **base, "showlegend": False, "x": xs,
+            "y": [a.total_elevation_gain for a in group],
+            "text": [_h(a, f"D+: {int(a.total_elevation_gain or 0)} m") for a in group],
+        })
+
+    yaxis_base = {"gridcolor": "#334155", "zerolinecolor": "#334155"}
+
+    layout_hr = {
+        **_base_layout,
+        "margin": {**_base_layout["margin"], "r": 20},
+        "showlegend": True,
+        "legend": {"bgcolor": "rgba(30,41,59,0.85)", "bordercolor": "#334155", "borderwidth": 1,
+                   "x": 0.01, "xanchor": "left", "y": 0.99, "yanchor": "top"},
+        "yaxis": {**yaxis_base, "title": "FC moy (bpm)"},
+    }
+    layout_pace = {
+        **_base_layout,
+        "showlegend": False,
+        "yaxis": {**yaxis_base, "title": "Allure (min/km)", "autorange": "reversed", "tickformat": ".2f"},
+    }
+    layout_elev = {
+        **_base_layout,
+        "showlegend": False,
+        "yaxis": {**yaxis_base, "title": "Dénivelé+ (m)"},
+    }
+
+    return JSONResponse({
+        "charts": {
+            "hr":   {"traces": traces_hr,   "layout": layout_hr},
+            "pace": {"traces": traces_pace, "layout": layout_pace},
+            "elev": {"traces": traces_elev, "layout": layout_elev},
+        },
+        "count": len(activities),
+    })
 
 
 @router.get("/api/activities")

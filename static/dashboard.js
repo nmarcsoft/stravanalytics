@@ -4,7 +4,7 @@ let pendingModalId = null;
 
 /* ── DOM refs ── */
 const filterForm    = document.getElementById('filter-form');
-const chart         = document.getElementById('chart');
+const chartPanels   = document.querySelectorAll('#charts-wrap .chart-panel');
 const chartEmpty    = document.getElementById('chart-empty');
 const actBody       = document.getElementById('act-body');
 const noActivities  = document.getElementById('no-activities');
@@ -57,30 +57,71 @@ function escHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-/* ── Chart ── */
-let chartInitialized = false;
+/* ── Charts ── */
+let chartsInitialized = false;
+const _CHART_IDS = ['chart-hr', 'chart-pace', 'chart-elev'];
 
 async function loadChart() {
   const params = buildParams();
   const res = await fetch('/api/chart-data?' + params);
   const data = await res.json();
 
-  if (!data.traces || data.traces.length === 0 || data.count === 0) {
-    chart.classList.add('hidden');
+  if (!data.count) {
+    chartPanels.forEach(p => p.classList.add('hidden'));
     chartEmpty.classList.remove('hidden');
     return;
   }
 
-  chart.classList.remove('hidden');
+  chartPanels.forEach(p => p.classList.remove('hidden'));
   chartEmpty.classList.add('hidden');
 
-  const config = { responsive: true, displayModeBar: false };
-  if (!chartInitialized) {
-    Plotly.newPlot('chart', data.traces, data.layout, config);
-    chartInitialized = true;
+  const cfg = { responsive: true, displayModeBar: false };
+
+  if (!chartsInitialized) {
+    Plotly.newPlot('chart-hr',   data.charts.hr.traces,   data.charts.hr.layout,   cfg);
+    Plotly.newPlot('chart-pace', data.charts.pace.traces, data.charts.pace.layout, cfg);
+    Plotly.newPlot('chart-elev', data.charts.elev.traces, data.charts.elev.layout, cfg);
+    chartsInitialized = true;
+    _setupChartSync();
   } else {
-    Plotly.react('chart', data.traces, data.layout, config);
+    Plotly.react('chart-hr',   data.charts.hr.traces,   data.charts.hr.layout,   cfg);
+    Plotly.react('chart-pace', data.charts.pace.traces, data.charts.pace.layout, cfg);
+    Plotly.react('chart-elev', data.charts.elev.traces, data.charts.elev.layout, cfg);
   }
+}
+
+function _setupChartSync() {
+  const divs = _CHART_IDS.map(id => document.getElementById(id));
+  const hrDiv = divs[0];
+
+  // Legend click on HR chart → sync visibility to pace + elev charts
+  hrDiv.on('plotly_legendclick', ev => {
+    const cur = hrDiv.data[ev.curveNumber];
+    const nextVis = (cur.visible === true || cur.visible === undefined) ? 'legendonly' : true;
+    divs.forEach(d => Plotly.restyle(d, { visible: nextVis }, [ev.curveNumber]));
+    return false;
+  });
+  hrDiv.on('plotly_legenddoubleclick', () => {
+    divs.forEach(d => Plotly.restyle(d, { visible: true }, [0, 1, 2, 3]));
+    return false;
+  });
+
+  // Zoom/pan on any chart → sync x-axis to the others
+  let _syncing = false;
+  divs.forEach(srcDiv => {
+    srcDiv.on('plotly_relayout', ev => {
+      if (_syncing) return;
+      const r0 = ev['xaxis.range[0]'], r1 = ev['xaxis.range[1]'];
+      const auto = ev['xaxis.autorange'];
+      if (r0 === undefined && auto === undefined) return;
+      _syncing = true;
+      const update = (r0 !== undefined)
+        ? { 'xaxis.range': [r0, r1], 'xaxis.autorange': false }
+        : { 'xaxis.autorange': true };
+      divs.forEach(tgt => { if (tgt !== srcDiv) Plotly.relayout(tgt, update); });
+      _syncing = false;
+    });
+  });
 }
 
 /* ── Activity table ── */
