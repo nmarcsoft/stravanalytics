@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% block head %}
+<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<header class="topbar">
+  <div class="topbar-brand">
+    <svg width="28" height="28" viewBox="0 0 48 48" fill="none">
+      <rect width="48" height="48" rx="10" fill="#FC4C02"/>
+      <path d="M20 34l-8-14h6l2 4 2-4h6L20 34zm8-14l8 14h-6l-2-4-2 4h-6l8-14z" fill="white"/>
+    </svg>
+    StravaAnalytics
+  </div>
+  <div class="topbar-right">
+    <button id="sync-btn" class="btn-secondary">
+      <span id="sync-label">⟳ Synchroniser</span>
+    </button>
+    {% if user.profile_url %}
+    <img src="{{ user.profile_url }}" class="avatar" alt="{{ user.name }}">
+    {% endif %}
+    <span class="user-name">{{ user.name }}</span>
+    <a href="/auth/logout" class="btn-ghost">Déconnexion</a>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- Sidebar filtres -->
+  <aside class="sidebar">
+    <form id="filter-form" autocomplete="off">
+      <div class="filter-section">
+        <label class="filter-label">Période</label>
+        <div class="filter-row">
+          <input type="date" name="date_from" class="input-sm"
+                 value="{{ filters.date_from or '' }}" placeholder="Début">
+          <span class="filter-sep">→</span>
+          <input type="date" name="date_to" class="input-sm"
+                 value="{{ filters.date_to or '' }}" placeholder="Fin">
+        </div>
+      </div>
+
+      <div class="filter-section">
+        <label class="filter-label">Titre contient</label>
+        <input type="text" name="title_contains" class="input-full"
+               value="{{ filters.title_contains or '' }}" placeholder="ex: VMA, sortie…">
+      </div>
+
+      <div class="filter-section">
+        <label class="filter-label">Description contient</label>
+        <input type="text" name="description_contains" class="input-full"
+               value="{{ filters.description_contains or '' }}" placeholder="ex: seuil…">
+      </div>
+
+      <div class="filter-section">
+        <label class="filter-label">Distance (km)</label>
+        <div class="filter-row">
+          <input type="number" name="distance_min" class="input-sm" min="0" step="0.5"
+                 value="{{ filters.distance_min or '' }}" placeholder="Min">
+          <span class="filter-sep">—</span>
+          <input type="number" name="distance_max" class="input-sm" min="0" step="0.5"
+                 value="{{ filters.distance_max or '' }}" placeholder="Max">
+        </div>
+      </div>
+
+      <div class="filter-section">
+        <label class="filter-label">Dénivelé+ (m)</label>
+        <div class="filter-row">
+          <input type="number" name="elevation_min" class="input-sm" min="0" step="10"
+                 value="{{ filters.elevation_min or '' }}" placeholder="Min">
+          <span class="filter-sep">—</span>
+          <input type="number" name="elevation_max" class="input-sm" min="0" step="10"
+                 value="{{ filters.elevation_max or '' }}" placeholder="Max">
+        </div>
+      </div>
+
+      <div class="filter-section">
+        <label class="filter-label">Types de séances</label>
+        {% set saved_types = (filters.session_types or 'VMA,SEUIL,EF,OTHER').split(',') %}
+        <div class="checkbox-group">
+          {% for val, label, color in [('VMA','VMA','#EF4444'),('SEUIL','Seuil','#F59E0B'),('EF','EF','#10B981'),('OTHER','Autre','#6B7280')] %}
+          <label class="checkbox-label">
+            <input type="checkbox" name="session_types" value="{{ val }}"
+                   {% if val in saved_types %}checked{% endif %}>
+            <span class="type-dot" style="background:{{ color }}"></span>
+            {{ label }}
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+
+      <button type="submit" class="btn-primary btn-full">Appliquer les filtres</button>
+    </form>
+
+    <div id="filter-stats" class="filter-stats"></div>
+  </aside>
+
+  <!-- Contenu principal -->
+  <main class="main-content">
+    <div class="section-title">Progression</div>
+    <div id="chart-wrap">
+      <div id="chart"></div>
+      <div id="chart-empty" class="chart-empty hidden">Aucune séance pour ces filtres.</div>
+    </div>
+
+    <div class="section-title" style="margin-top:2rem">
+      Séances
+      <span id="activity-count" class="badge"></span>
+    </div>
+    <div class="table-wrap">
+      <table class="act-table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Titre</th>
+            <th>Type</th>
+            <th>Distance</th>
+            <th>Durée</th>
+            <th>Allure</th>
+            <th>D+</th>
+            <th>FC moy</th>
+          </tr>
+        </thead>
+        <tbody id="act-body"></tbody>
+      </table>
+      <div id="no-activities" class="no-activities hidden">Aucune séance.</div>
+    </div>
+    <div id="pagination" class="pagination"></div>
+  </main>
+</div>
+
+<!-- Modal override type -->
+<div id="type-modal" class="modal hidden">
+  <div class="modal-backdrop"></div>
+  <div class="modal-box">
+    <div class="modal-title">Modifier le type de séance</div>
+    <div id="modal-activity-name" class="modal-sub"></div>
+    <div class="modal-options">
+      {% for val, label, color in [('VMA','VMA','#EF4444'),('SEUIL','Seuil','#F59E0B'),('EF','EF','#10B981'),('OTHER','Autre','#6B7280')] %}
+      <button class="modal-type-btn" data-type="{{ val }}" style="--c:{{ color }}">{{ label }}</button>
+      {% endfor %}
+      <button class="modal-type-btn modal-auto" data-type="">Auto (reclassifier)</button>
+    </div>
+    <button id="modal-cancel" class="btn-ghost">Annuler</button>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="/static/dashboard.js"></script>
+{% endblock %}

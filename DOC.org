@@ -1,0 +1,367 @@
+#+TITLE: StravaAnalytics — Documentation
+#+DATE: 2026-05-17
+#+OPTIONS: toc:nil num:nil ^:nil
+#+STARTUP: showall
+
+Application web d'analyse de données running connectée à Strava. Multi-utilisateurs, déployable sur Railway.
+
+#+TOC: headlines 2
+
+* Architecture
+
+#+BEGIN_EXAMPLE
+Navigateur  ──────────────────────────────────────────────────────────────────
+            Jinja2 templates + Plotly.js (pas de build step)
+            Fetch API vers les endpoints JSON
+
+FastAPI (Python)  ────────────────────────────────────────────────────────────
+            SessionMiddleware (cookie 30 jours, signé itsdangerous)
+            /auth/*        → OAuth Strava
+            /api/*         → JSON (chart, activités, sync)
+            /              → page dashboard
+
+PostgreSQL  ──────────────────────────────────────────────────────────────────
+            users          → tokens Strava + filtres sauvegardés
+            activities     → cache des activités Strava
+
+Strava API  ──────────────────────────────────────────────────────────────────
+            OAuth 2.0 (access_token + refresh_token)
+            GET /athlete/activities  → liste paginée
+            GET /activities/{id}     → description détaillée
+#+END_EXAMPLE
+
+*Choix techniques :*
+- Pas de framework JS — Plotly.js suffit pour les graphiques interactifs
+- SQLAlchemy ORM avec ~create_all~ au démarrage (pas de migrations Alembic)
+- Un seul service Railway + addon PostgreSQL = déploiement minimal
+- ~psycopg2-binary~ pour la compatibilité Railway sans dépendances système
+
+* Installation locale
+
+*Prérequis :* Python 3.12+, PostgreSQL (ou utiliser SQLite pour le dev)
+
+#+BEGIN_SRC sh
+# 1. Cloner et créer l'environnement
+git clone git@github.com:nmarcsoft/stravanalytics.git
+cd stravanalytics
+python -m venv .venv
+source .venv/bin/activate          # Windows : .venv\Scripts\activate
+
+# 2. Installer les dépendances
+pip install -r requirements.txt
+
+# 3. Configurer les variables d'environnement
+cp .env.example .env
+
+#3.1 Sur fish, pour exporter les variables :
+for line in (cat .env)
+    set -gx (string split -m1 = $line)
+end
+# Éditer .env (voir section Configuration)
+
+# 4. Lancer
+uvicorn app.main:app --reload
+# → http://localhost:8000
+#+END_SRC
+
+Pour SQLite en développement (sans PostgreSQL installé), mettre dans ~.env~ :
+
+#+BEGIN_EXAMPLE
+DATABASE_URL=sqlite:///./dev.db
+#+END_EXAMPLE
+
+* Configuration
+
+Toutes les variables sont lues depuis ~.env~ (dev) ou les variables d'environnement Railway (prod).
+
+| Variable              | Obligatoire | Description                                                                              |
+|-----------------------+-------------+------------------------------------------------------------------------------------------|
+| ~DATABASE_URL~        | Oui         | URL PostgreSQL. Railway injecte automatiquement. Format ~postgres://~ ou ~postgresql://~ acceptés. |
+| ~STRAVA_CLIENT_ID~    | Oui         | ID de l'application Strava                                                               |
+| ~STRAVA_CLIENT_SECRET~| Oui         | Secret de l'application Strava                                                           |
+| ~SECRET_KEY~          | Oui         | Clé de signature des sessions. Générer avec ~openssl rand -hex 32~                      |
+| ~BASE_URL~            | Oui         | URL publique de l'app, utilisée pour le callback OAuth. Ex: ~https://monapp.railway.app~|
+
+** Créer une application Strava
+
+1. Aller sur [[https://www.strava.com/settings/api][strava.com/settings/api]]
+2. Remplir les champs :
+   - *Application Name* : StravaAnalytics (ou autre)
+   - *Category* : Data Importer
+   - *Authorization Callback Domain* : ~localhost~ (dev) ou ~monapp.railway.app~ (prod)
+3. Récupérer ~Client ID~ et ~Client Secret~
+
+#+BEGIN_QUOTE
+Le champ "Authorization Callback Domain" ne doit contenir que le domaine, sans ~https://~ ni chemin.
+#+END_QUOTE
+
+* Déploiement Railway
+
+#+BEGIN_SRC sh
+# 1. Installer Railway CLI
+npm install -g @railway/cli
+
+# 2. Authentification et nouveau projet
+railway login
+railway new
+
+# 3. Ajouter PostgreSQL
+railway add --database postgres
+
+# 4. Variables d'environnement
+railway variables set \
+  STRAVA_CLIENT_ID=12345 \
+  STRAVA_CLIENT_SECRET=abc123 \
+  SECRET_KEY=$(openssl rand -hex 32) \
+  BASE_URL=https://monapp.railway.app
+
+# 5. Déployer
+railway up
+#+END_SRC
+
+Après le premier déploiement, Railway affiche l'URL publique. Mettre à jour le champ
+*Authorization Callback Domain* dans l'app Strava avec ce domaine.
+
+Le ~Dockerfile~ est détecté automatiquement par Railway. Le port est injecté via ~$PORT~.
+
+* Fonctionnalités
+
+** Connexion
+
+- OAuth 2.0 Strava — aucun mot de passe stocké
+- Session persistante 30 jours (cookie signé côté serveur)
+- Multi-utilisateurs : chaque compte Strava est isolé
+
+** Synchronisation des activités
+
+- Bouton *Synchroniser* dans la barre supérieure
+- Seules les activités de type ~Run~, ~VirtualRun~, ~TrailRun~ sont importées
+- Première sync : toutes les activités depuis le début
+- Syncs suivantes : uniquement les nouvelles activités depuis la dernière sync
+- La description de chaque activité est récupérée en parallèle (5 requêtes simultanées max
+  pour respecter les rate limits Strava : 100 req/15 min)
+
+** Graphique de progression
+
+- Tracé par Plotly.js côté client
+- X : date de la séance
+- Y : jusqu'à 6 métriques simultanées, chacune sur son propre axe :
+  - Allure (min/km) — axe inversé, visible par défaut
+  - Distance (km) — visible par défaut
+  - FC moyenne (bpm) — masquée par défaut, toggle via légende
+  - FC maximale (bpm) — masquée par défaut
+  - Dénivelé+ (m) — masqué par défaut
+  - Durée (min) — masquée par défaut
+- Chaque type de séance a sa couleur : VMA rouge, Seuil orange, EF vert, Autre gris
+- Cliquer sur une entrée de la légende l'affiche ou la masque
+
+** Filtres
+
+Les filtres sont appliqués simultanément au graphique et à la table.
+Ils sont *sauvegardés automatiquement* et restaurés à la prochaine connexion.
+
+| Filtre              | Type            | Description                                           |
+|---------------------+-----------------+-------------------------------------------------------|
+| Période             | Date from / to  | Plage de dates des séances                            |
+| Titre contient      | Texte           | Recherche insensible à la casse dans le nom           |
+| Description contient| Texte           | Recherche dans la description Strava                  |
+| Distance            | Min / Max (km)  | Borne sur la distance totale                          |
+| Dénivelé+           | Min / Max (m)   | Borne sur le dénivelé positif                         |
+| Types de séances    | Checkboxes      | VMA / Seuil / EF / Autre, combinables                 |
+
+** Table des séances
+
+- Triée par date décroissante
+- Pagination 25 séances par page
+- Badge de type cliquable pour modifier la classification manuellement
+- Un point sur le badge indique qu'un override manuel est actif
+
+* Classification des séances
+
+La classification est automatique à l'import, basée sur des mots-clés dans le *titre*
+et la *description* de l'activité Strava.
+
+** Mots-clés par défaut
+
+| Type     | Mots-clés détectés                                                                    |
+|----------+---------------------------------------------------------------------------------------|
+| *VMA*    | ~vma~, ~vo2~, ~vitesse maximale aérobie~, ~interval~, ~répét~, ~fractionnés~         |
+| *SEUIL*  | ~seuil~, ~threshold~, ~tempo~, ~lactate~, ~allure seuil~                             |
+| *EF*     | ~ef~, ~endurance fondamentale~, ~sortie longue~, ~fondamental~, ~récup~, ~recovery~, ~footing~, ~z2~, ~zone 2~ |
+| *AUTRE*  | tout le reste                                                                         |
+
+La détection est *insensible à la casse*. La première correspondance trouvée dans
+l'ordre VMA → SEUIL → EF gagne.
+
+** Override manuel
+
+Si la classification automatique est incorrecte, cliquer sur le badge de type dans la
+table ouvre un modal permettant de forcer le type. Choisir *Auto* remet la
+classification automatique.
+
+Les overrides sont stockés séparément de la classification automatique et persistent
+entre les syncs.
+
+* API
+
+Tous les endpoints JSON requièrent une session active (cookie). Retournent HTTP 401 sinon.
+
+** POST /api/sync
+
+Lance la synchronisation des nouvelles activités depuis Strava.
+
+*Réponse :*
+
+#+BEGIN_SRC json
+{ "synced": 12 }
+#+END_SRC
+
+** GET /api/chart-data
+
+Retourne les données Plotly pour le graphique.
+
+*Paramètres query :*
+
+| Paramètre             | Type           | Description                            |
+|-----------------------+----------------+----------------------------------------|
+| ~date_from~           | string (ISO)   | Début de période                       |
+| ~date_to~             | string (ISO)   | Fin de période                         |
+| ~title_contains~      | string         | Filtre sur le titre                    |
+| ~description_contains~| string         | Filtre sur la description              |
+| ~distance_min~        | float          | Distance minimale en km                |
+| ~distance_max~        | float          | Distance maximale en km                |
+| ~elevation_min~       | float          | Dénivelé+ minimal en m                 |
+| ~elevation_max~       | float          | Dénivelé+ maximal en m                 |
+| ~session_types~       | string         | Types séparés par virgule. Ex: ~VMA,SEUIL~ |
+
+*Réponse :*
+
+#+BEGIN_SRC json
+{
+  "traces": [ ],
+  "layout": { },
+  "count": 42
+}
+#+END_SRC
+
+Sauvegarde automatiquement les filtres dans ~users.last_filters~.
+
+** GET /api/activities
+
+Retourne la liste paginée des activités.
+
+*Paramètres query :* identiques à ~/api/chart-data~, plus ~page~ (entier, défaut 1).
+
+*Réponse :*
+
+#+BEGIN_SRC json
+{
+  "activities": [
+    {
+      "id": 1,
+      "strava_id": 123456789,
+      "name": "Séance VMA 8x400m",
+      "date": "15/01/2024",
+      "session_type": "VMA",
+      "session_type_auto": "VMA",
+      "session_type_override": null,
+      "distance_km": 12.4,
+      "duration_min": 58,
+      "pace": "4:41",
+      "elevation": 85,
+      "avg_hr": 172
+    }
+  ],
+  "total": 156,
+  "page": 1,
+  "pages": 7
+}
+#+END_SRC
+
+** POST /api/activities/{id}/type
+
+Met à jour le type d'une séance manuellement.
+
+*Body JSON :*
+
+#+BEGIN_SRC json
+{ "session_type": "SEUIL" }
+#+END_SRC
+
+Valeurs acceptées : ~VMA~, ~SEUIL~, ~EF~, ~OTHER~, ou ~""~ (vide = supprimer l'override, revenir à l'auto).
+
+*Réponse :*
+
+#+BEGIN_SRC json
+{ "effective_type": "SEUIL" }
+#+END_SRC
+
+* Structure des fichiers
+
+#+BEGIN_EXAMPLE
+stravanalytics/
+├── app/
+│   ├── main.py            # Entry point FastAPI — montage routes, middlewares, création tables
+│   ├── config.py          # Variables d'environnement (pydantic-settings)
+│   ├── database.py        # Engine SQLAlchemy, session factory, Base
+│   ├── models.py          # ORM : User, Activity (avec propriétés calculées)
+│   ├── classifier.py      # Classification VMA/SEUIL/EF par mots-clés
+│   ├── strava.py          # Client Strava : refresh token, sync activités + descriptions
+│   ├── routers/
+│   │   ├── auth.py        # GET /auth/login, /auth/callback, /auth/logout
+│   │   └── dashboard.py   # GET /, /api/chart-data, /api/activities, POST /api/sync, /api/activities/{id}/type
+│   └── templates/
+│       ├── base.html      # Layout de base (fonts, CSS, head commun)
+│       ├── login.html     # Page de connexion Strava
+│       └── dashboard.html # Interface principale (sidebar filtres + chart + table)
+├── static/
+│   ├── main.css           # Thème dark, composants (sidebar, table, modal, toast, badges)
+│   └── dashboard.js       # Logique client : chart Plotly, table, pagination, modal, sync
+├── Dockerfile             # Image Python 3.12-slim, port dynamique via $PORT
+├── railway.toml           # Config Railway (builder Dockerfile, healthcheck)
+├── requirements.txt       # Dépendances Python
+└── .env.example           # Template des variables d'environnement
+#+END_EXAMPLE
+
+* Modèle de données
+
+** Table ~users~
+
+| Colonne            | Type              | Description                                    |
+|--------------------+-------------------+------------------------------------------------|
+| ~id~               | Integer PK        |                                                |
+| ~strava_id~        | BigInteger unique | ID Strava de l'athlète                         |
+| ~name~             | String            | Prénom + Nom Strava                            |
+| ~profile_url~      | String            | URL de l'avatar Strava                         |
+| ~access_token~     | String            | Token d'accès Strava (expire après 6h)         |
+| ~refresh_token~    | String            | Token de renouvellement                        |
+| ~token_expires_at~ | Integer           | Timestamp Unix d'expiration                    |
+| ~last_sync_at~     | DateTime          | Date de la dernière synchronisation            |
+| ~last_filters~     | JSON              | Derniers filtres appliqués (restaurés à la connexion) |
+
+** Table ~activities~
+
+| Colonne                  | Type              | Description                                      |
+|--------------------------+-------------------+--------------------------------------------------|
+| ~id~                     | Integer PK        |                                                  |
+| ~user_id~                | FK → users        |                                                  |
+| ~strava_id~              | BigInteger unique | ID Strava de l'activité                          |
+| ~name~                   | String            | Titre de l'activité                              |
+| ~description~            | String            | Description Strava (fetched séparément)          |
+| ~activity_type~          | String            | ~Run~, ~TrailRun~, ~VirtualRun~                  |
+| ~start_date~             | DateTime          | Date/heure de départ (UTC, naïve)                |
+| ~distance~               | Float             | Mètres                                           |
+| ~moving_time~            | Integer           | Secondes (temps en mouvement)                    |
+| ~total_elevation_gain~   | Float             | Mètres de dénivelé positif                       |
+| ~average_speed~          | Float             | m/s                                              |
+| ~average_heartrate~      | Float             | bpm                                              |
+| ~max_heartrate~          | Float             | bpm                                              |
+| ~average_watts~          | Float             | W (si capteur de puissance)                      |
+| ~session_type~           | String            | Classification automatique : ~VMA~, ~SEUIL~, ~EF~, ~OTHER~ |
+| ~session_type_override~  | String            | Override manuel (null = pas d'override)          |
+
+*Propriétés calculées (non stockées) :*
+- ~effective_session_type~ → ~session_type_override~ si défini, sinon ~session_type~
+- ~distance_km~ → ~distance / 1000~
+- ~duration_min~ → ~moving_time / 60~
+- ~pace_min_per_km~ → ~1000 / (average_speed × 60)~

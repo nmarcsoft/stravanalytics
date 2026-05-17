@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="login-wrap">
+  <div class="login-card">
+    <div class="login-logo">
+      <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+        <rect width="48" height="48" rx="12" fill="#FC4C02"/>
+        <path d="M20 34l-8-14h6l2 4 2-4h6L20 34zm8-14l8 14h-6l-2-4-2 4h-6l8-14z" fill="white"/>
+      </svg>
+    </div>
+    <h1>StravaAnalytics</h1>
+    <p class="login-sub">Analysez votre progression running</p>
+    {% if error %}
+    <div class="alert-error">Connexion échouée. Réessayez.</div>
+    {% endif %}
+    <a href="/auth/login" class="btn-strava">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+        <path d="M10 2a8 8 0 100 16A8 8 0 0010 2zm0 14.5a6.5 6.5 0 110-13 6.5 6.5 0 010 13z"/>
+      </svg>
+      Se connecter avec Strava
+    </a>
+    <p class="login-note">Vos données restent privées et ne sont jamais partagées.</p>
+  </div>
+</div>
+{% endblock %}
