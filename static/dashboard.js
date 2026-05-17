@@ -93,17 +93,30 @@ async function loadChart() {
 function _setupChartSync() {
   const divs = _CHART_IDS.map(id => document.getElementById(id));
   const hrDiv = divs[0];
+  // Trace layout: index 0 = line, indices 1-4 = session type markers
+  const TYPE_INDICES = [1, 2, 3, 4];
 
-  // Legend click on HR chart → sync visibility to pace + elev charts
+  // Legend on HR chart → sync visibility to pace + elev (marker traces only)
   hrDiv.on('plotly_legendclick', ev => {
-    const cur = hrDiv.data[ev.curveNumber];
-    const nextVis = (cur.visible === true || cur.visible === undefined) ? 'legendonly' : true;
-    divs.forEach(d => Plotly.restyle(d, { visible: nextVis }, [ev.curveNumber]));
+    const i = ev.curveNumber;
+    if (!TYPE_INDICES.includes(i)) return true;
+    const nextVis = (hrDiv.data[i].visible === true || hrDiv.data[i].visible === undefined) ? 'legendonly' : true;
+    divs.forEach(d => Plotly.restyle(d, { visible: nextVis }, [i]));
     return false;
   });
   hrDiv.on('plotly_legenddoubleclick', () => {
-    divs.forEach(d => Plotly.restyle(d, { visible: true }, [0, 1, 2, 3]));
+    divs.forEach(d => Plotly.restyle(d, { visible: true }, TYPE_INDICES));
     return false;
+  });
+
+  // Click on a point → open Strava activity
+  divs.forEach(div => {
+    div.on('plotly_click', ev => {
+      const pt = ev.points[0];
+      if (pt && pt.customdata) {
+        window.open(`https://www.strava.com/activities/${pt.customdata}`, '_blank');
+      }
+    });
   });
 
   // Zoom/pan on any chart → sync x-axis to the others
@@ -144,7 +157,9 @@ async function loadActivities(page = 1) {
   actBody.innerHTML = data.activities.map(act => `
     <tr>
       <td>${act.date}</td>
-      <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escHtml(act.name)}">${escHtml(act.name)}</td>
+      <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+        <a href="https://www.strava.com/activities/${act.strava_id}" target="_blank" rel="noopener" class="strava-link" title="${escHtml(act.name)}">${escHtml(act.name)}</a>
+      </td>
       <td>${badgeHtml(act)}</td>
       <td>${act.distance_km} km</td>
       <td>${act.duration_min} min</td>

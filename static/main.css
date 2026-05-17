@@ -224,6 +224,9 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(.6); }
 .type-badge.OTHER { background: rgba(107,114,128,.2);color: var(--other); }
 .type-badge .override-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; opacity: .7; }
 
+.strava-link { color: var(--text); text-decoration: none; }
+.strava-link:hover { color: var(--orange); }
+
 .no-activities, .hidden { display: none !important; }
 .no-activities { padding: 2rem; text-align: center; color: var(--muted); }
 
