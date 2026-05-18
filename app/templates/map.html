@@ -31,17 +31,23 @@
 <div class="map-layout">
   <!-- Floating controls -->
   <div class="map-controls">
-    <div class="map-controls-title">Filtrer</div>
+    <div class="map-controls-title">Filtrer par type</div>
+    {% set saved_types = (filters.session_types or 'VMA,SEUIL,EF,OTHER').split(',') %}
     <div class="checkbox-group">
       {% for val, label, color in [('VMA','VMA','#EF4444'),('SEUIL','Seuil','#F59E0B'),('EF','EF','#10B981'),('OTHER','Autre','#6B7280')] %}
       <label class="checkbox-label">
-        <input type="checkbox" class="type-filter" value="{{ val }}" checked>
+        <input type="checkbox" class="type-filter" value="{{ val }}"
+               {% if val in saved_types %}checked{% endif %}>
         <span class="type-dot" style="background:{{ color }}"></span>
         {{ label }}
       </label>
       {% endfor %}
     </div>
     <div id="map-count" class="map-count">Chargement…</div>
+    {% set f = filters %}
+    {% if f and (f.elevation_min or f.elevation_max or f.distance_min or f.distance_max or f.date_from or f.date_to or f.title_contains or f.description_contains) %}
+    <div class="filter-active">Filtres actifs<br><a href="/" class="filter-active-link">Modifier →</a></div>
+    {% endif %}
   </div>
 
   <!-- Map -->

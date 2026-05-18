@@ -84,14 +84,18 @@ async def index(request: Request, user: Optional[User] = Depends(_current_user))
 async def map_page(request: Request, user: Optional[User] = Depends(_current_user)):
     if not user:
         return templates.TemplateResponse("login.html", {"request": request, "error": None})
-    return templates.TemplateResponse("map.html", {"request": request, "user": user})
+    return templates.TemplateResponse("map.html", {
+        "request": request, "user": user, "filters": user.last_filters or {},
+    })
 
 
 @router.get("/duel", response_class=HTMLResponse)
 async def duel_page(request: Request, user: Optional[User] = Depends(_current_user)):
     if not user:
         return templates.TemplateResponse("login.html", {"request": request, "error": None})
-    return templates.TemplateResponse("duel.html", {"request": request, "user": user})
+    return templates.TemplateResponse("duel.html", {
+        "request": request, "user": user, "filters": user.last_filters or {},
+    })
 
 
 # ── API ────────────────────────────────────────────────────────────────────────
@@ -314,10 +318,15 @@ async def api_map_data(request: Request, db: Session = Depends(get_db),
     if not user:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
 
-    with_poly = db.query(Activity).filter(
-        Activity.user_id == user.id,
-        Activity.summary_polyline.isnot(None),
-    ).order_by(Activity.start_date).all()
+    f = user.last_filters or {}
+    # Apply saved filters (date/distance/elevation/title) — types filtered client-side
+    with_poly = _apply_filters(
+        db.query(Activity), user.id,
+        f.get("date_from"), f.get("date_to"),
+        f.get("title_contains"), f.get("description_contains"),
+        f.get("distance_min"), f.get("distance_max"),
+        f.get("elevation_min"), f.get("elevation_max"),
+    ).filter(Activity.summary_polyline.isnot(None)).order_by(Activity.start_date).all()
 
     without_count = db.query(Activity).filter(
         Activity.user_id == user.id,
@@ -403,11 +412,28 @@ async def api_duel(request: Request, db: Session = Depends(get_db),
         return JSONResponse({"error": "period must be week or month"}, status_code=400)
 
     def _stats(start, end):
-        acts = db.query(Activity).filter(
+        f = user.last_filters or {}
+        base = db.query(Activity).filter(
             Activity.user_id == user.id,
             Activity.start_date >= datetime(start.year, start.month, start.day, 0, 0, 0),
             Activity.start_date <= datetime(end.year, end.month, end.day, 23, 59, 59),
-        ).all()
+        )
+        # Apply non-date saved filters (elevation, distance, types, keywords)
+        if f.get("title_contains"):
+            base = base.filter(Activity.name.ilike(f"%{f['title_contains']}%"))
+        if f.get("description_contains"):
+            base = base.filter(Activity.description.ilike(f"%{f['description_contains']}%"))
+        if f.get("distance_min") is not None:
+            base = base.filter(Activity.distance >= f["distance_min"] * 1000)
+        if f.get("distance_max") is not None:
+            base = base.filter(Activity.distance <= f["distance_max"] * 1000)
+        if f.get("elevation_min") is not None:
+            base = base.filter(Activity.total_elevation_gain >= f["elevation_min"])
+        if f.get("elevation_max") is not None:
+            base = base.filter(Activity.total_elevation_gain <= f["elevation_max"])
+        if f.get("session_types"):
+            base = _filter_by_types(base, set(f["session_types"].split(",")))
+        acts = base.all()
         total_km = sum(a.distance_km for a in acts)
         total_min = sum(a.duration_min for a in acts)
         total_elev = sum(a.total_elevation_gain or 0 for a in acts)

@@ -4,7 +4,9 @@ const TYPE_LABELS = { VMA: 'VMA', SEUIL: 'Seuil', EF: 'EF', OTHER: 'Autre' };
 
 /* ── State ── */
 let mapInstance, allActivities = [], polylineLayers = [];
-let selectedTypes = new Set(['VMA', 'SEUIL', 'EF', 'OTHER']);
+let selectedTypes = new Set(
+  [...document.querySelectorAll('.type-filter:checked')].map(cb => cb.value)
+);
 let panelChartsInitialized = false;
 
 /* ── Polyline decoder (Google Encoded Polyline Algorithm) ── */
@@ -41,8 +43,10 @@ async function loadActivities() {
   const missing = data.without_polyline || 0;
   const countEl = document.getElementById('map-count');
   countEl.textContent = `${allActivities.length} tracé${allActivities.length > 1 ? 's' : ''}`;
-  if (missing > 0) {
-    countEl.innerHTML += `<br><span style="color:var(--muted);font-size:10px">${missing} sans tracé — synchronisez</span>`;
+  if (allActivities.length === 0) {
+    countEl.innerHTML += `<br><span style="color:var(--orange);font-size:10px">Cliquez "Synchroniser" sur le Dashboard pour charger les tracés</span>`;
+  } else if (missing > 0) {
+    countEl.innerHTML += `<br><span style="color:var(--muted);font-size:10px">${missing} sans tracé GPS</span>`;
   }
 
   renderPolylines();

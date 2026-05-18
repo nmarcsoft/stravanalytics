@@ -24,7 +24,13 @@
 
 <div class="duel-layout">
   <div class="duel-header">
-    <h1 class="duel-title">Duel — Toi vs Toi</h1>
+    <div>
+      <h1 class="duel-title">Duel — Toi vs Toi</h1>
+      {% set f = filters %}
+      {% if f and (f.elevation_min or f.elevation_max or f.distance_min or f.distance_max or f.title_contains or f.description_contains or (f.session_types and f.session_types != 'VMA,SEUIL,EF,OTHER')) %}
+      <div class="filter-active">Filtres actifs — <a href="/" class="filter-active-link">Modifier sur le Dashboard →</a></div>
+      {% endif %}
+    </div>
     <div class="period-selector">
       <button id="btn-week" class="period-btn active" data-period="week">Semaine</button>
       <button id="btn-month" class="period-btn" data-period="month">Mois</button>
