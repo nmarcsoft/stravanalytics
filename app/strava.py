@@ -55,7 +55,15 @@ async def _fetch_description(client: httpx.AsyncClient, token: str, strava_id: i
 
 async def sync_activities(user: User, db: Session) -> int:
     token = await _refresh_if_needed(user, db)
-    after = int(user.last_sync_at.replace(tzinfo=timezone.utc).timestamp()) if user.last_sync_at else 0
+
+    # If any activities are missing polylines, do a full resync to backfill them
+    needs_backfill = db.query(Activity).filter(
+        Activity.user_id == user.id,
+        Activity.summary_polyline.is_(None),
+    ).count() > 0
+    after = 0 if needs_backfill else (
+        int(user.last_sync_at.replace(tzinfo=timezone.utc).timestamp()) if user.last_sync_at else 0
+    )
 
     new_strava_activities: list[dict] = []
     page = 1
