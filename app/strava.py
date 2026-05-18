@@ -76,7 +76,13 @@ async def sync_activities(user: User, db: Session) -> int:
             for act in batch:
                 if act.get("type") not in ("Run", "VirtualRun", "TrailRun"):
                     continue
-                if db.query(Activity).filter_by(strava_id=act["id"]).first():
+                existing = db.query(Activity).filter_by(strava_id=act["id"]).first()
+                if existing:
+                    # Backfill polyline for activities synced before this field was added
+                    if existing.summary_polyline is None:
+                        polyline = act.get("map", {}).get("summary_polyline") or None
+                        if polyline:
+                            existing.summary_polyline = polyline
                     continue
                 new_strava_activities.append(act)
 
@@ -111,6 +117,7 @@ async def sync_activities(user: User, db: Session) -> int:
             max_heartrate=act.get("max_heartrate"),
             average_watts=act.get("average_watts"),
             session_type=session_type,
+            summary_polyline=act.get("map", {}).get("summary_polyline") or None,
         ))
 
     user.last_sync_at = datetime.utcnow()

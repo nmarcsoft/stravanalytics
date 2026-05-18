@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block head %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<header class="topbar">
+  <div class="topbar-brand">
+    <svg width="28" height="28" viewBox="0 0 48 48" fill="none">
+      <rect width="48" height="48" rx="10" fill="#FC4C02"/>
+      <path d="M20 34l-8-14h6l2 4 2-4h6L20 34zm8-14l8 14h-6l-2-4-2 4h-6l8-14z" fill="white"/>
+    </svg>
+    StravaAnalytics
+  </div>
+  <nav class="topbar-nav">
+    <a href="/" class="nav-link">Dashboard</a>
+    <a href="/map" class="nav-link active">Carte</a>
+    <a href="/duel" class="nav-link">Duel</a>
+  </nav>
+  <div class="topbar-right">
+    {% if user.profile_url %}
+    <img src="{{ user.profile_url }}" class="avatar" alt="{{ user.name }}">
+    {% endif %}
+    <span class="user-name">{{ user.name }}</span>
+    <a href="/auth/logout" class="btn-ghost">Déconnexion</a>
+  </div>
+</header>
+
+<div class="map-layout">
+  <!-- Floating controls -->
+  <div class="map-controls">
+    <div class="map-controls-title">Filtrer</div>
+    <div class="checkbox-group">
+      {% for val, label, color in [('VMA','VMA','#EF4444'),('SEUIL','Seuil','#F59E0B'),('EF','EF','#10B981'),('OTHER','Autre','#6B7280')] %}
+      <label class="checkbox-label">
+        <input type="checkbox" class="type-filter" value="{{ val }}" checked>
+        <span class="type-dot" style="background:{{ color }}"></span>
+        {{ label }}
+      </label>
+      {% endfor %}
+    </div>
+    <div id="map-count" class="map-count">Chargement…</div>
+  </div>
+
+  <!-- Map -->
+  <div id="map-view"></div>
+
+  <!-- Activity detail panel -->
+  <div id="map-panel" class="map-panel hidden">
+    <button id="panel-close" class="panel-close">✕</button>
+    <div id="panel-info">
+      <div id="panel-name" class="panel-name"></div>
+      <div id="panel-meta" class="panel-meta"></div>
+      <div id="panel-stats" class="panel-stats"></div>
+    </div>
+    <div id="panel-charts">
+      <div id="panel-loading" class="panel-loading">Chargement des courbes…</div>
+      <div id="panel-chart-hr"  class="panel-chart hidden"></div>
+      <div id="panel-chart-pace" class="panel-chart hidden"></div>
+      <div id="panel-chart-alt" class="panel-chart hidden"></div>
+      <div id="panel-no-streams" class="panel-loading hidden">Pas de données GPS disponibles.</div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/map.js"></script>
+{% endblock %}

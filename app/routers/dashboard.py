@@ -1,6 +1,8 @@
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from typing import Optional
+import calendar
 
+import httpx
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
@@ -9,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import User, Activity
-from ..strava import sync_activities
+from ..strava import sync_activities, _refresh_if_needed
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
@@ -74,10 +76,22 @@ async def index(request: Request, user: Optional[User] = Depends(_current_user))
         return templates.TemplateResponse("login.html", {"request": request,
                                                           "error": request.query_params.get("error")})
     return templates.TemplateResponse("dashboard.html", {
-        "request": request,
-        "user": user,
-        "filters": user.last_filters or {},
+        "request": request, "user": user, "filters": user.last_filters or {},
     })
+
+
+@router.get("/map", response_class=HTMLResponse)
+async def map_page(request: Request, user: Optional[User] = Depends(_current_user)):
+    if not user:
+        return templates.TemplateResponse("login.html", {"request": request, "error": None})
+    return templates.TemplateResponse("map.html", {"request": request, "user": user})
+
+
+@router.get("/duel", response_class=HTMLResponse)
+async def duel_page(request: Request, user: Optional[User] = Depends(_current_user)):
+    if not user:
+        return templates.TemplateResponse("login.html", {"request": request, "error": None})
+    return templates.TemplateResponse("duel.html", {"request": request, "user": user})
 
 
 # ── API ────────────────────────────────────────────────────────────────────────
@@ -292,3 +306,146 @@ async def api_set_type(
     act.session_type_override = new_type
     db.commit()
     return JSONResponse({"effective_type": act.effective_session_type})
+
+
+@router.get("/api/map-data")
+async def api_map_data(request: Request, db: Session = Depends(get_db),
+                       user: Optional[User] = Depends(_current_user)):
+    if not user:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    with_poly = db.query(Activity).filter(
+        Activity.user_id == user.id,
+        Activity.summary_polyline.isnot(None),
+    ).order_by(Activity.start_date).all()
+
+    without_count = db.query(Activity).filter(
+        Activity.user_id == user.id,
+        Activity.summary_polyline.is_(None),
+    ).count()
+
+    return JSONResponse({
+        "activities": [{
+            "strava_id": a.strava_id,
+            "name": a.name,
+            "date": a.start_date.strftime("%d/%m/%Y"),
+            "type": a.effective_session_type,
+            "distance_km": round(a.distance_km, 2),
+            "duration_min": int(a.duration_min),
+            "pace": _fmt_pace(a.pace_min_per_km),
+            "avg_hr": int(a.average_heartrate) if a.average_heartrate else None,
+            "elevation": int(a.total_elevation_gain or 0),
+            "polyline": a.summary_polyline,
+        } for a in with_poly],
+        "without_polyline": without_count,
+    })
+
+
+@router.get("/api/activities/{strava_id}/streams")
+async def api_streams(strava_id: int, request: Request, db: Session = Depends(get_db),
+                      user: Optional[User] = Depends(_current_user)):
+    if not user:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    act = db.query(Activity).filter_by(strava_id=strava_id, user_id=user.id).first()
+    if not act:
+        return JSONResponse({"error": "Introuvable"}, status_code=404)
+
+    token = await _refresh_if_needed(user, db)
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            f"https://www.strava.com/api/v3/activities/{strava_id}/streams",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"keys": "latlng,heartrate,altitude,distance,velocity_smooth",
+                    "key_by_type": "true"},
+            timeout=15,
+        )
+    if resp.status_code != 200:
+        return JSONResponse({"error": "Strava error"}, status_code=resp.status_code)
+
+    raw = resp.json()
+    return JSONResponse({
+        "latlng":    raw.get("latlng", {}).get("data", []),
+        "heartrate": raw.get("heartrate", {}).get("data", []),
+        "altitude":  raw.get("altitude", {}).get("data", []),
+        "distance":  raw.get("distance", {}).get("data", []),
+        "velocity":  raw.get("velocity_smooth", {}).get("data", []),
+    })
+
+
+@router.get("/api/duel")
+async def api_duel(request: Request, db: Session = Depends(get_db),
+                   user: Optional[User] = Depends(_current_user),
+                   period: str = "week"):
+    if not user:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    today = date.today()
+
+    if period == "week":
+        a_start = today - timedelta(days=today.weekday())
+        a_end = today
+        b_start = a_start - timedelta(days=7)
+        b_end = a_start - timedelta(days=1)
+        label_a, label_b = "Cette semaine", "Semaine précédente"
+    elif period == "month":
+        a_start = today.replace(day=1)
+        a_end = today
+        if today.month == 1:
+            b_start = date(today.year - 1, 12, 1)
+            b_end = date(today.year - 1, 12, 31)
+        else:
+            b_start = date(today.year, today.month - 1, 1)
+            b_end = date(today.year, today.month - 1,
+                         calendar.monthrange(today.year, today.month - 1)[1])
+        label_a, label_b = "Ce mois", "Mois précédent"
+    else:
+        return JSONResponse({"error": "period must be week or month"}, status_code=400)
+
+    def _stats(start, end):
+        acts = db.query(Activity).filter(
+            Activity.user_id == user.id,
+            Activity.start_date >= datetime(start.year, start.month, start.day, 0, 0, 0),
+            Activity.start_date <= datetime(end.year, end.month, end.day, 23, 59, 59),
+        ).all()
+        total_km = sum(a.distance_km for a in acts)
+        total_min = sum(a.duration_min for a in acts)
+        total_elev = sum(a.total_elevation_gain or 0 for a in acts)
+        hr_vals = [a.average_heartrate for a in acts if a.average_heartrate]
+        by_type = {t: 0 for t in ("VMA", "SEUIL", "EF", "OTHER")}
+        for a in acts:
+            by_type[a.effective_session_type] += 1
+        return {
+            "count": len(acts),
+            "km": round(total_km, 1),
+            "min": int(total_min),
+            "elevation": int(total_elev),
+            "avg_hr": round(sum(hr_vals) / len(hr_vals)) if hr_vals else None,
+            "avg_pace": round(total_min / total_km, 2) if total_km > 0 else None,
+            "by_type": by_type,
+        }
+
+    sa, sb = _stats(a_start, a_end), _stats(b_start, b_end)
+
+    def _win(va, vb, higher=True):
+        if va is None or vb is None:
+            return None
+        if va == vb:
+            return "tie"
+        return "a" if (va > vb) == higher else "b"
+
+    winners = {
+        "km":        _win(sa["km"], sb["km"]),
+        "count":     _win(sa["count"], sb["count"]),
+        "elevation": _win(sa["elevation"], sb["elevation"]),
+        "pace":      _win(sa["avg_pace"], sb["avg_pace"], higher=False),
+    }
+    score_a = sum(1 for v in winners.values() if v == "a")
+    score_b = sum(1 for v in winners.values() if v == "b")
+
+    return JSONResponse({
+        "period_a": {"label": label_a, "start": str(a_start), "end": str(a_end), "stats": sa},
+        "period_b": {"label": label_b, "start": str(b_start), "end": str(b_end), "stats": sb},
+        "winners": winners,
+        "score": {"a": score_a, "b": score_b},
+    })

@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="topbar">
+  <div class="topbar-brand">
+    <svg width="28" height="28" viewBox="0 0 48 48" fill="none">
+      <rect width="48" height="48" rx="10" fill="#FC4C02"/>
+      <path d="M20 34l-8-14h6l2 4 2-4h6L20 34zm8-14l8 14h-6l-2-4-2 4h-6l8-14z" fill="white"/>
+    </svg>
+    StravaAnalytics
+  </div>
+  <nav class="topbar-nav">
+    <a href="/" class="nav-link">Dashboard</a>
+    <a href="/map" class="nav-link">Carte</a>
+    <a href="/duel" class="nav-link active">Duel</a>
+  </nav>
+  <div class="topbar-right">
+    {% if user.profile_url %}
+    <img src="{{ user.profile_url }}" class="avatar" alt="{{ user.name }}">
+    {% endif %}
+    <span class="user-name">{{ user.name }}</span>
+    <a href="/auth/logout" class="btn-ghost">Déconnexion</a>
+  </div>
+</header>
+
+<div class="duel-layout">
+  <div class="duel-header">
+    <h1 class="duel-title">Duel — Toi vs Toi</h1>
+    <div class="period-selector">
+      <button id="btn-week" class="period-btn active" data-period="week">Semaine</button>
+      <button id="btn-month" class="period-btn" data-period="month">Mois</button>
+    </div>
+  </div>
+
+  <div id="duel-score" class="duel-score hidden"></div>
+
+  <div class="duel-grid">
+    <div id="card-a" class="duel-card"></div>
+    <div class="duel-vs">VS</div>
+    <div id="card-b" class="duel-card"></div>
+  </div>
+</div>
+
+<script src="/static/duel.js"></script>
+{% endblock %}

@@ -40,6 +40,7 @@ class Activity(Base):
     average_watts = Column(Float)
     session_type = Column(String, default="OTHER")  # classification auto
     session_type_override = Column(String)          # override manuel
+    summary_polyline = Column(String)               # Google Encoded Polyline
 
     user = relationship("User", back_populates="activities")
 
